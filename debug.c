@@ -31,7 +31,7 @@ typedef struct __attribute__((packed)) {
 #define DW_FORM_string 0x08 // string
 
 
-unsigned int decode_uleb128(uint8_t **ptr);
+uint64_t decode_uleb128(uint8_t **ptr);
 Elf64_Shdr * get_section(Elf64_Shdr **shdr_array, uint16_t sh_num, const char * cmp, char *str_tab); 
 
 int main(int argc, char **argv) {
@@ -84,7 +84,6 @@ int main(int argc, char **argv) {
     // Get the string table section header
     Elf64_Shdr *shstrtab = &shdr_array[shstrndx];
     // Get pointer to string table data
-    printf("this is strtab");
     char *strtab = (char *)elf_bytes + shstrtab->sh_offset;
 
     Elf64_Shdr *sh = get_section(&shdr_array, shnum, ".debug_line", strtab);
@@ -92,7 +91,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    void * ptr1 = (elf_bytes + sh->sh_offset);
+    uint8_t * ptr1 = (elf_bytes + sh->sh_offset);
     // line number program address start
     uint8_t *lineNumber_ptr = (uint8_t *) (ptr1 + 42);
 
@@ -104,31 +103,45 @@ int main(int argc, char **argv) {
     // length
     uint32_t *len = (uint32_t *) (ptr1); 
     // dwarf version
-    uint16_t *version = (uint16_t *) (ptr1 + 4);
+    ptr1+=4;
+    uint16_t *version = (uint16_t *) (ptr1);
     // address size
-    uint8_t *addy = (uint8_t *) (ptr1 + 6);
+    ptr1+=2;
+    uint8_t *addy = (uint8_t *) (ptr1);
     // seg selector size
-    uint8_t *seg_size = (uint8_t *) (ptr1 + 7);
+    ptr1+=1;
+    uint8_t *seg_size = (uint8_t *) (ptr1);
     // header length
-    uint32_t *header_len = (uint32_t *) (ptr1 + 8);
+    ptr1+=1;
+    uint32_t *header_len = (uint32_t *) (ptr1);
     // min instruction length
-    uint8_t *min_ins_len = (uint8_t *) ((void *)header_len) + 4;
+    ptr1+=4;
+    uint8_t *min_ins_len = (uint8_t *) ptr1;
     // max operation per instruction
-    uint8_t *max_op_inst = (uint8_t *) ((void *)min_ins_len) + 1;
+    ptr1+=1;
+    uint8_t *max_op_inst = (uint8_t *) ptr1;
     // default is_st_mt
-    uint8_t *def_is_stmt = (uint8_t *) ((void *)max_op_inst) + 1;
+    ptr1+=1;
+    uint8_t *def_is_stmt = (uint8_t *) ptr1;
     // line base
-    int8_t *line_base = (int8_t *) ((void *)def_is_stmt)+1;
+    ptr1+=1;
+    int8_t *line_base = (int8_t *) ptr1;
     // line range
-    uint8_t *line_range = (uint8_t *) ((void *)line_base)+1;
+    ptr1+=1;
+    uint8_t *line_range = (uint8_t *) ptr1;
     // opcode base
-    uint8_t *opcode_base = (uint8_t *) ((void *)line_range)+1;
+    ptr1+=1;
+    uint8_t *opcode_base = (uint8_t *) ptr1;
     // standard opcode len
-    uint8_t *std_opcode_len = (uint8_t *) ((void *)opcode_base)+1;
-    // directory entry format
-    uint8_t *dir_ent_fmt = std_opcode_len + (*opcode_base - 1);
+    ptr1+=1;
+    uint8_t *std_opcode_len = (uint8_t *) ptr1;
+    // directory entry format count
+    ptr1 = ptr1 + (*opcode_base -1);
+    uint8_t *dir_ent_fmt_count = ptr1;
     // directory entry format sequence
-    uint8_t *dir_ent_fmt_seq = dir_ent_fmt + 1;
+    ptr1+=1;
+    uint8_t *dir_ent_fmt_seq = ptr1;
+    //ptr1+=1;
 
 
     size_t size = (size_t) sh->sh_size;
@@ -157,21 +170,27 @@ int main(int argc, char **argv) {
     }
 
 
-    printf("   %-30s %u\n", "Directory entry Format:", *dir_ent_fmt);
-    uint8_t *ptr3 = dir_ent_fmt_seq;
-    for (int i = 0; i < *dir_ent_fmt; i++) {
-        uint8_t ct = decode_uleb128(&ptr3);
-        uint8_t fc = decode_uleb128(&ptr3);
-        printf("   %x  %x\n", ct, fc);
+    printf("   %-30s %u\n", "Directory entry Format:", *dir_ent_fmt_count);
+    //uint8_t *ptr3 = dir_ent_fmt_seq;
+    uint64_t dct_arr[*dir_ent_fmt_count] = {};
+    uint64_t dfc_arr[*dir_ent_fmt_count] = {};
+    for (int i = 0; i < *dir_ent_fmt_count; i++) {
+        dct_arr[i] = decode_uleb128(&ptr1);
+        dfc_arr[i] = decode_uleb128(&ptr1);
+        //uint64_t ct = decode_uleb128(&ptr3);
+        //uint64_t fc = decode_uleb128(&ptr3);
+        printf("   %x  %x\n", dct_arr[i], dfc_arr[i]);
 
     }
     // directories count
-    uint8_t *dir_count = ptr3;
+    //uint8_t *dir_count = ptr3;
     //printf("Directories count: %lx\n", decode_uleb128(&dir_count));
-    uint8_t dc = decode_uleb128(&dir_count);
-    uint8_t *directories = dir_count;
+    uint64_t dc = decode_uleb128(&ptr1);
+    printf("Directory count: %d\n", dc); 
 
-    // now we fine the debug_line_str section addr
+    uint8_t *directories = ptr1;
+
+    // now we find the debug_line_str section addr
 
     sh = get_section(&shdr_array, shnum, ".debug_line_str", strtab);
     if (sh == NULL) {
@@ -179,31 +198,137 @@ int main(int argc, char **argv) {
     }
     
     uint8_t * db_lstr = (uint8_t *)(elf_bytes + sh->sh_offset);
-    uint8_t * ptr5 = directories;
-    for (uint64_t i = 0; i < dc; i++) {
-        uint32_t offset = *(uint32_t *)ptr5;
-        ptr5 +=4;
+    //uint8_t * ptr1 = directories;
 
-        char *dir_name = (char *)(db_lstr + offset);
-        printf("  Directory[%lu]: offset=0x%x -> \"%s\"\n", i, offset, dir_name);
+
+    for (int j = 0; j < dc; j++) {
+        for (int i = 0; i < *dir_ent_fmt_count; i++) {
+            switch (dct_arr[i]) {
+                case DW_LNCT_path:
+                    //printf("Content code is DW_LNCT_path\n");
+                    // can only be paired with
+                    switch (dfc_arr[i]) {
+                        case DW_FORM_line_strp:
+                            //printf("Form code is DW_FORM_line_strp\n");
+
+                            uint32_t offset = *(uint32_t *)(ptr1);
+                            ptr1 +=4;
+
+                            char *name = (char *)(db_lstr + offset);
+                            printf("  offset=0x%x -> \"%s\"\n", offset, name);
+                            break;
+                        default:    // TODO:
+                            break;
+                    }
+                    break;
+                case DW_LNCT_directory_index:
+                    printf("Content code is DW_LNCT_directory_index\n");
+                    // can only be paired with
+                    switch (dfc_arr[i]) {
+                        case DW_FORM_udata:
+                            //printf("Form code is DW_FORM_udata\n");
+                            uint64_t dir_index = decode_uleb128(&ptr1);
+                            printf("Dir Index = %d\n", dir_index);
+                            //ptr1+=1;
+                            break;
+                        case DW_FORM_data1: // TODO
+                            break;
+                        case DW_FORM_data2: // TODO
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+
+                default:
+                    break;
+
+            }
+        }
     }
 
     // file name entry format count
-    uint8_t *file_name_entry_fmt_count = ptr5;
+    uint8_t *file_name_entry_fmt_count = ptr1;
     printf("File Name Entry Format Count: %d\n", *file_name_entry_fmt_count);
 
     // file name entry format
-    uint8_t *file_entry_format = ptr5;
-    ptr5++;
+    uint8_t *file_entry_format = ptr1++;
+   
+    uint64_t ct_arr[*file_name_entry_fmt_count] = {};
+    uint64_t fc_arr[*file_name_entry_fmt_count] = {};
+
     for (int i = 0; i < *file_name_entry_fmt_count; i++) {
-        uint8_t ct = decode_uleb128(&ptr5);
-        uint8_t fc = decode_uleb128(&ptr5);
-        printf("   %x  %x\n", ct, fc);
+        ct_arr[i] = decode_uleb128(&ptr1);
+        fc_arr[i] = decode_uleb128(&ptr1);
+        printf("   %x  %x\n", ct_arr[i], fc_arr[i]);
+    }
+
+    // file names count
+    uint64_t fn_c = decode_uleb128(&ptr1); 
+    
+    printf("File Name Count: %d\n", fn_c);
+    for (int j = 0; j < fn_c; j++) {
+        for (int i = 0; i < *file_name_entry_fmt_count; i++) {
+            switch (ct_arr[i]) {
+                case DW_LNCT_path:
+                    printf("Content code is DW_LNCT_path\n");
+                    // can only be paired with
+                    switch (fc_arr[i]) {
+                        case DW_FORM_line_strp:
+                            printf("Form code is DW_FORM_line_strp\n");
+
+                            uint32_t offset = *(uint32_t *)(ptr1);
+                            ptr1 +=4;
+
+                            char *name = (char *)(db_lstr + offset);
+                            printf("  offset=0x%x -> \"%s\"\n", offset, name);
+                            break;
+                        default:
+                            printf("in here %d %x\n", i, fc_arr[i]);
+                            break;
+                    }
+                    break;
+                case DW_LNCT_directory_index:
+                    printf("Content code is DW_LNCT_directory_index\n");
+                    // can only be paired with
+                    switch (fc_arr[i]) {
+                        case DW_FORM_udata:
+                            printf("Form code is DW_FORM_udata\n");
+                            uint64_t dir_index = decode_uleb128(&ptr1);
+                            printf("Dir Index = %d\n", dir_index);
+                            //ptr1+=1;
+                            break;
+                        case DW_FORM_data1:
+                            printf("Form code is DW_FORM_data1\n");
+                            break;
+                        case DW_FORM_data2:
+                            printf("Form code is DW_FORM_data2\n");
+                            break;
+                        default:
+                            break;
+                    }
+                    break;
+
+                default:
+                    break;
+
+            }
+        }
+
     }
 
 
+
+    /*
+    for (uint64_t i = 0; i < *file){
+
+    }
+    */
+
     return 0;
 }
+
+
 
 Elf64_Shdr * get_section(Elf64_Shdr **shdr_array, uint16_t sh_num, const char * cmp, char *str_tab) {
 
@@ -245,7 +370,7 @@ do {
   shift += 7;
 } while ((byte & 0x80) != 0); get high-order bit of byte 
 */
-unsigned int decode_uleb128(uint8_t **ptr){
+uint64_t decode_uleb128(uint8_t **ptr){
 
     uint64_t result = 0;
     int shift = 0;
