@@ -21,12 +21,36 @@ typedef struct __attribute__((packed)) {
     uint32_t header_length; 
     uint8_t min_instruction_length; // segment selector
     uint8_t max_ops_per_instruction;
-    uint8_t default_is_smt; //
+    uint8_t default_is_smt; 
     int8_t line_base;
     uint8_t line_range;
     uint8_t opcode_base;
-    uint8_t std_opcode_lengths[12]; // this can changes, if opcode_base is increased
+    uint8_t std_opcode_lengths[12]; // this can change, if opcode_base is increased
 } DebugLineHeader;
+
+typedef struct __attribute__((packed)) {
+    uint64_t address; // the program-counter value corresponding to a machine instruction generated
+                      // by the compiler
+    uint64_t op_index; // unsigned integer rep the index of an operation within a VLIW ins...
+                       // for non-vliw arch, this register will always be 0
+    uint64_t file;  // uint indicating the identity of the source file corresponsing to a machine instrcution
+    uint64_t line; // uint indicating source line number. lines are numbered beginning at 1.
+    uint64_t column; // uint indicating a col number within a source line. col numbered beginning at 1
+    bool is_stmt; // boolean indicating currnet instruction is a recommended breakpoint location.
+    bool basic_block; // boolean indicating that the current instruction is the beginning of 
+                         // a basic block
+    bool end_sequence; // boolean indcitin the current address is taht of the first bytes after
+                          // the end of a sequence of target machine instructions. 
+    bool prologue_end; // boolean indicating that the current address is one where execution
+                          // should be suspended for a breakpoint at the entry of a function
+    bool epilogue_begin; // a boolean indicating that the current address is one where execution
+                            // should be suspended for a breakpoint just priour to the exit of a 
+                            // function
+    uint64_t isa; // an uint whose value encodes the application inst set arch for the current inst
+    uint64_t discriminator;
+    
+
+} ProgramRegisterState;
 
 #define DW_FORM_string 0x08 // string
 
@@ -311,19 +335,114 @@ int main(int argc, char **argv) {
 
                 default:
                     break;
-
             }
         }
+    }
+
+    //printf("Checking: %x", *ptr1);
+    //ptr1++;
+    //uint64_t lol = decode_uleb128(&ptr1);
+    //printf("Checking: %d", lol);
+
+    ProgramRegisterState *state_arr = calloc(100, sizeof(ProgramRegisterState));
+
+    // initial register state
+    state_arr[0].address = 0;
+    state_arr[0].op_index = 0;
+    state_arr[0].file = 1;
+    state_arr[0].line = 1;
+    state_arr[0].is_stmt = 0;
+    state_arr[0].column = 0;
+    state_arr[0].basic_block = false;
+    state_arr[0].end_sequence = false;
+    state_arr[0].prologue_end = false;
+    state_arr[0].epilogue_begin = false;
+    state_arr[0].isa = 0;
+    state_arr[0].discriminator = 0;
+
+    // Line Number Program
+    uint8_t * curr;
+    int inc = 1;
+    while ((curr = ptr1++)) {
+        
+        // special opcode ranges from 13 to 255
+        // he lower bound may increase if one adds new standard opcodes. Thus,26
+        // the opcode_base field of the line number program header gives the value of the first27
+        // special opcode.
+        if (*curr == 0x00) {
+            // how many bytes ex opcode spans
+            int span = *ptr1++;
+            printf("opcode spans %d bytes\n", span);
+            uint8_t ex_opcode = *ptr1++;
+            switch(ex_opcode) {
+                case DW_LNE_end_sequence: 
+                    inc++;
+                    break;
+                case DW_LNE_set_address:
+                    printf("Setting address\n");
+                    uint64_t *addy = (uint64_t *)ptr1;
+                    ptr1+=span;
+                    printf("Address 0x%lx\n", *addy);
+                    state_arr[inc].op_index = 0;
+                    break;
+                default:
+                    break;
+
+            }
+
+        }
+        else if (*curr < *opcode_base) { // standard opcodes
+            switch(*curr) {
+                case DW_LNS_set_column:
+                    printf("Checking: %d\n", *curr);
+                //ptr1++;
+                    uint64_t col_val = decode_uleb128(&ptr1);
+                    printf("Checking: %d\n", col_val);
+                    state_arr[inc].column = col_val;
+                    break;
+                case DW_LNS_copy:
+                    break;
+                case DW_LNS_advance_pc:
+                    break;
+                case DW_LNS_advance_line:
+                    break;
+                case DW_LNS_set_file:
+                    break;
+                case DW_LNS_set_column:
+                    break;
+                case DW_LNS_negate_stmt:
+                    break;
+                case DW_LNS_set_basic_block:
+                    break;
+                case DW_LNS_const_add_pc:
+                    break;
+                case DW_LNS_fixed_advance_pc:
+                    break;
+                case DW_LNS_set_prologue_end:
+                    break; 
+                case DW_LNS_set_epilogue_begin:
+                    break;
+                case DW_LNS_set_isa:
+                    state_arr[inc].isa = decode_uleb128(&ptr1);
+                    break;
+                default:
+                    return 0;
+            }
+
+
+        } else if (*curr >= *opcode_base && *curr < 255) { // special opcodes
+
+
+
+        }
+         
+
+
+
+
 
     }
 
-
-
-    /*
-    for (uint64_t i = 0; i < *file){
-
-    }
-    */
 
     return 0;
 }
