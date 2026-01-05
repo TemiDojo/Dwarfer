@@ -52,10 +52,17 @@ typedef struct __attribute__((packed)) {
 
 } ProgramRegisterState;
 
+typedef struct __attribute__((packed)) {
+    ProgramRegisterState *state_arr;
+
+} ProgramMatrix;
+
 #define DW_FORM_string 0x08 // string
 
 
 uint64_t decode_uleb128(uint8_t **ptr);
+void initialize_default_state(ProgramRegisterState **state_arr);
+void append_row_matrix(ProgramRegisterState **state_arr, int row_index);
 Elf64_Shdr * get_section(Elf64_Shdr **shdr_array, uint16_t sh_num, const char * cmp, char *str_tab); 
 
 int main(int argc, char **argv) {
@@ -345,24 +352,13 @@ int main(int argc, char **argv) {
     //printf("Checking: %d", lol);
 
     ProgramRegisterState *state_arr = calloc(100, sizeof(ProgramRegisterState));
-
-    // initial register state
-    state_arr[0].address = 0;
-    state_arr[0].op_index = 0;
-    state_arr[0].file = 1;
-    state_arr[0].line = 1;
-    state_arr[0].is_stmt = 0;
-    state_arr[0].column = 0;
-    state_arr[0].basic_block = false;
-    state_arr[0].end_sequence = false;
-    state_arr[0].prologue_end = false;
-    state_arr[0].epilogue_begin = false;
-    state_arr[0].isa = 0;
-    state_arr[0].discriminator = 0;
+    ProgramRegisterState default_state = {0, 0, 1, 1, 0, 0, true, false, false, false, 0, 0};
+    // initialize default program register state
+    initialize_default_state(&state_arr);
 
     // Line Number Program
     uint8_t * curr;
-    int inc = 1;
+    int inc = 0;
     while ((curr = ptr1++)) {
         
         // special opcode ranges from 13 to 255
@@ -376,14 +372,21 @@ int main(int argc, char **argv) {
             uint8_t ex_opcode = *ptr1++;
             switch(ex_opcode) {
                 case DW_LNE_end_sequence: 
+                    printf("Appending to row/ End sequence \n");
                     inc++;
+                    append_row_matrix(&state_arr, inc);
+                    if (inc > 100) {
+                        state_arr = realloc(state_arr, 100 * sizeof(ProgramRegisterState));
+                    }
+                    return 0;
                     break;
                 case DW_LNE_set_address:
                     printf("Setting address\n");
                     uint64_t *addy = (uint64_t *)ptr1;
-                    ptr1+=span;
+                    ptr1+=sizeof(*addy);
                     printf("Address 0x%lx\n", *addy);
-                    state_arr[inc].op_index = 0;
+                    state_arr[0].address = *addy;
+                    state_arr[0].op_index = 0;
                     break;
                 default:
                     break;
@@ -394,44 +397,94 @@ int main(int argc, char **argv) {
         else if (*curr < *opcode_base) { // standard opcodes
             switch(*curr) {
                 case DW_LNS_set_column:
-                    printf("Checking: %d\n", *curr);
-                //ptr1++;
+                    printf("DW_LNS_set_column: %d\n", *curr);
                     uint64_t col_val = decode_uleb128(&ptr1);
                     printf("Checking: %d\n", col_val);
-                    state_arr[inc].column = col_val;
+                    state_arr[0].column = col_val;
                     break;
                 case DW_LNS_copy:
+                    printf("DW_LNS_copy: %d\n", *curr);
                     break;
                 case DW_LNS_advance_pc:
+                    printf("DW_LNS_advance_pc: %d\n", *curr);
                     break;
                 case DW_LNS_advance_line:
+                    printf("DW_LNS_advance_line: %d\n", *curr);
                     break;
                 case DW_LNS_set_file:
-                    break;
-                case DW_LNS_set_column:
+                    printf("DW_LNS_set_file: %d\n", *curr);
                     break;
                 case DW_LNS_negate_stmt:
+                    printf("DW_LNS_negate_stmt: %d\n", *curr);
                     break;
                 case DW_LNS_set_basic_block:
+                    printf("DW_LNS_set_basic_block: %d\n", *curr);
                     break;
                 case DW_LNS_const_add_pc:
+                    printf("DW_LNS_const_add_pc: %d\n", *curr);
+                    // advances teh address and op_index registers by the increments 
+                    // corresponding to special opcode 255
+                    int adj_opcode = 255 - *opcode_base;
+                    int op_advance = adj_opcode / *line_range;
+                    uint64_t address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) /
+                            *max_op_inst);
+                    state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
+
                     break;
                 case DW_LNS_fixed_advance_pc:
+                    printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
+                    uint16_t operand = *(uint16_t *)ptr1; 
+                    state_arr[0].address = state_arr[0].address + operand;
+                    state_arr[0].op_index = 0;
+                    ptr+=sizeof(operand);
                     break;
                 case DW_LNS_set_prologue_end:
+                    printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
+                    state_arr[0].prologue_end = true;
                     break; 
                 case DW_LNS_set_epilogue_begin:
+                    printf("DW_LNS_epilogue_begin: %d\n", *curr);
+                    state_arr[0].isa = true;
                     break;
                 case DW_LNS_set_isa:
-                    state_arr[inc].isa = decode_uleb128(&ptr1);
+                    printf("DW_LNS_set_isa: %d\n", *curr);
+                    state_arr[0].isa = decode_uleb128(&ptr1);
                     break;
                 default:
                     return 0;
             }
 
 
-        } else if (*curr >= *opcode_base && *curr < 255) { // special opcodes
+        } else if (*curr >= *opcode_base && *curr <= 255) { // special opcodes
+            printf("Special Opcode Number: %d\n", *curr);
+            // calculate adjusted opcode and operation advance
+            int adj_opcode = *curr - *opcode_base;
+            int op_advance = adj_opcode / *line_range; 
 
+            uint64_t address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) / 
+                    *max_op_inst);
+
+            state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
+
+            int line_inc = *line_base + (adj_opcode % *line_range);
+
+            printf("Adjusted opcode: %d| Operation Advance: %d| Line Increment: %d|\n", adj_opcode, op_advance, line_inc);
+            printf("New Address: 0x%lx += %d | New OpIndex: %d |\n", state_arr[inc].address, address_inc, state_arr[0].op_index); 
+            // add a signed integer to the line register
+            state_arr[0].line = state_arr[0].line + line_inc;
+            // modify the operation pointer by incrementing the address and op_index registers
+            state_arr[0].address += address_inc;
+            // append a row to the matrix using the current values of the state machine reg
+            inc++;
+            append_row_matrix(&state_arr, inc);
+            // set the basic_blocks register to false
+            state_arr[0].basic_block = false;
+            // set the prologue_end register to false
+            state_arr[0].prologue_end = false;
+            // set the epilogue_begin register to false
+            state_arr[0].epilogue_begin = false;
+            // set the discriminator register to 0
+            state_arr[0].discriminator = 0;
 
 
         }
@@ -447,6 +500,40 @@ int main(int argc, char **argv) {
     return 0;
 }
 
+
+void append_row_matrix(ProgramRegisterState **state_arr, int row_index){
+    
+    ProgramRegisterState * dummy = *state_arr;
+    dummy[row_index].address = dummy[0].address;
+    dummy[row_index].op_index = dummy[0].op_index;
+    dummy[row_index].file = dummy[0].file;
+    dummy[row_index].line = dummy[0].line;
+    dummy[row_index].is_stmt = dummy[0].is_stmt;
+    dummy[row_index].column = dummy[0].column;
+    dummy[row_index].basic_block = dummy[0].basic_block;
+    dummy[row_index].end_sequence = dummy[0].end_sequence;
+    dummy[row_index].prologue_end = dummy[0].prologue_end;
+    dummy[row_index].epilogue_begin = dummy[0].epilogue_begin;
+    dummy[row_index].isa = dummy[0].isa;
+    dummy[row_index].discriminator = dummy[0].discriminator;
+
+}
+
+void initialize_default_state(ProgramRegisterState **state_arr) {
+    ProgramRegisterState * dummy = *state_arr;
+    dummy[0].address = 0;
+    dummy[0].op_index = 0;
+    dummy[0].file = 1;
+    dummy[0].line = 1;
+    dummy[0].is_stmt = 0;
+    dummy[0].column = 0;
+    dummy[0].basic_block = false;
+    dummy[0].end_sequence = false;
+    dummy[0].prologue_end = false;
+    dummy[0].epilogue_begin = false;
+    dummy[0].isa = 0;
+    dummy[0].discriminator = 0;
+}
 
 
 Elf64_Shdr * get_section(Elf64_Shdr **shdr_array, uint16_t sh_num, const char * cmp, char *str_tab) {
