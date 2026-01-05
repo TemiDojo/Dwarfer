@@ -61,6 +61,7 @@ typedef struct __attribute__((packed)) {
 
 
 uint64_t decode_uleb128(uint8_t **ptr);
+int64_t decode_sleb128(uint8_t **ptr);
 void initialize_default_state(ProgramRegisterState **state_arr);
 void append_row_matrix(ProgramRegisterState **state_arr, int row_index);
 Elf64_Shdr * get_section(Elf64_Shdr **shdr_array, uint16_t sh_num, const char * cmp, char *str_tab); 
@@ -346,10 +347,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    //printf("Checking: %x", *ptr1);
-    //ptr1++;
-    //uint64_t lol = decode_uleb128(&ptr1);
-    //printf("Checking: %d", lol);
 
     ProgramRegisterState *state_arr = calloc(100, sizeof(ProgramRegisterState));
     ProgramRegisterState default_state = {0, 0, 1, 1, 0, 0, true, false, false, false, 0, 0};
@@ -359,6 +356,12 @@ int main(int argc, char **argv) {
     // Line Number Program
     uint8_t * curr;
     int inc = 0;
+    uint64_t l_operand;
+    int64_t s_operand;
+    int adj_opcode;
+    int op_advance;
+    uint64_t address_inc;
+
     while ((curr = ptr1++)) {
         
         // special opcode ranges from 13 to 255
@@ -372,6 +375,7 @@ int main(int argc, char **argv) {
             uint8_t ex_opcode = *ptr1++;
             switch(ex_opcode) {
                 case DW_LNE_end_sequence: 
+                    state_arr[0].end_sequence = true;
                     printf("Appending to row/ End sequence \n");
                     inc++;
                     append_row_matrix(&state_arr, inc);
@@ -407,36 +411,58 @@ int main(int argc, char **argv) {
                     break;
                 case DW_LNS_advance_pc:
                     printf("DW_LNS_advance_pc: %d\n", *curr);
+                    // takes a single unsigned leb128 oerand as the operation advance
+                    // and modifies the address and op_index
+                    l_operand = decode_uleb128(&ptr1);
+                    op_advance = (int) l_operand;
+                    adj_opcode = op_advance * (*line_range);
+                    address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) /
+                            *max_op_inst);
+                    state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
+                    printf("New Address: 0x%lx += %d | New OpIndex: %d | \n", state_arr[inc].address, address_inc, state_arr[0].op_index);
+
+                    state_arr[0].address += address_inc;
+
                     break;
                 case DW_LNS_advance_line:
                     printf("DW_LNS_advance_line: %d\n", *curr);
+                    s_operand = decode_sleb128(&ptr1);                    
+                    state_arr[0].line += state_arr[0].line;
                     break;
                 case DW_LNS_set_file:
                     printf("DW_LNS_set_file: %d\n", *curr);
+                    l_operand = decode_uleb128(&ptr1);
+                    state_arr[0].file = l_operand;
                     break;
                 case DW_LNS_negate_stmt:
                     printf("DW_LNS_negate_stmt: %d\n", *curr);
+                    state_arr[0].is_stmt = !state_arr[0].is_stmt;
                     break;
                 case DW_LNS_set_basic_block:
                     printf("DW_LNS_set_basic_block: %d\n", *curr);
+                    state_arr[0].basic_block = true;
                     break;
                 case DW_LNS_const_add_pc:
                     printf("DW_LNS_const_add_pc: %d\n", *curr);
-                    // advances teh address and op_index registers by the increments 
+                    // advances the address and op_index registers by the increments 
                     // corresponding to special opcode 255
-                    int adj_opcode = 255 - *opcode_base;
-                    int op_advance = adj_opcode / *line_range;
-                    uint64_t address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) /
+                    adj_opcode = 255 - *opcode_base;
+                    op_advance = adj_opcode / *line_range;
+                    address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) /
                             *max_op_inst);
+
                     state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
+                    printf("New Address: 0x%lx += %d | New OpIndex: %d |\n", state_arr[inc].address, address_inc, state_arr[0].op_index); 
+
+                    state_arr[0].address += address_inc;
 
                     break;
                 case DW_LNS_fixed_advance_pc:
                     printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
-                    uint16_t operand = *(uint16_t *)ptr1; 
-                    state_arr[0].address = state_arr[0].address + operand;
+                    l_operand = *(uint16_t *)ptr1; 
+                    state_arr[0].address = state_arr[0].address + l_operand;
                     state_arr[0].op_index = 0;
-                    ptr+=sizeof(operand);
+                    ptr1+=sizeof(l_operand);
                     break;
                 case DW_LNS_set_prologue_end:
                     printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
@@ -458,10 +484,10 @@ int main(int argc, char **argv) {
         } else if (*curr >= *opcode_base && *curr <= 255) { // special opcodes
             printf("Special Opcode Number: %d\n", *curr);
             // calculate adjusted opcode and operation advance
-            int adj_opcode = *curr - *opcode_base;
-            int op_advance = adj_opcode / *line_range; 
+            adj_opcode = *curr - *opcode_base;
+            op_advance = adj_opcode / *line_range; 
 
-            uint64_t address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) / 
+            address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) / 
                     *max_op_inst);
 
             state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
@@ -593,6 +619,24 @@ uint64_t decode_uleb128(uint8_t **ptr){
 }
 
 
+int64_t decode_sleb128(uint8_t **ptr) {
+
+    int64_t result = 0;
+    int shift = 0;
+    uint8_t byte;
+
+    do {
+        byte = **ptr;
+        (*ptr)++;
+        result |= (int64_t)(byte & 0x7f) << shift;
+        shift += 7;
+    } while (byte & 0x80);
+
+    if ((shift < 64) && (byte & 0x40)) {
+        result |= -(1LL << shift);
+    }
+    return result;
+}
 
 
 
