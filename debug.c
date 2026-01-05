@@ -124,6 +124,7 @@ int main(int argc, char **argv) {
     }
 
     uint8_t * ptr1 = (elf_bytes + sh->sh_offset);
+    void * start = ptr1;
     // line number program address start
     uint8_t *lineNumber_ptr = (uint8_t *) (ptr1 + 42);
 
@@ -348,8 +349,9 @@ int main(int argc, char **argv) {
     }
 
 
-    ProgramRegisterState *state_arr = calloc(100, sizeof(ProgramRegisterState));
-    ProgramRegisterState default_state = {0, 0, 1, 1, 0, 0, true, false, false, false, 0, 0};
+    size_t allocated_size = 100;
+    ProgramRegisterState *state_arr = calloc(allocated_size, sizeof(ProgramRegisterState));
+    //ProgramRegisterState default_state = {0, 0, 1, 1, 0, 0, true, false, false, false, 0, 0};
     // initialize default program register state
     initialize_default_state(&state_arr);
 
@@ -362,36 +364,64 @@ int main(int argc, char **argv) {
     int op_advance;
     uint64_t address_inc;
 
+    uint64_t line_offset = (void *)ptr1 - start;
+
+    printf("\n\n");
+
+
     while ((curr = ptr1++)) {
-        
+        printf("0x%08lx: ", line_offset); 
         // special opcode ranges from 13 to 255
-        // he lower bound may increase if one adds new standard opcodes. Thus,26
+        // the lower bound may increase if one adds new standard opcodes. Thus,26
         // the opcode_base field of the line number program header gives the value of the first27
         // special opcode.
         if (*curr == 0x00) {
             // how many bytes ex opcode spans
             int span = *ptr1++;
-            printf("opcode spans %d bytes\n", span);
+
+            //printf("opcode spans %d bytes\n", span);
             uint8_t ex_opcode = *ptr1++;
             switch(ex_opcode) {
                 case DW_LNE_end_sequence: 
                     state_arr[0].end_sequence = true;
-                    printf("Appending to row/ End sequence \n");
+                    //printf("Appending to row/ End sequence \n");
+                    printf("%x DW_LNE_end_sequence\n", *curr); 
+
+                    printf("            0x%016lx     %d    %d    %d\n", state_arr[0].address, state_arr[0].line, state_arr[0].column, state_arr[0].file);
                     inc++;
-                    append_row_matrix(&state_arr, inc);
-                    if (inc > 100) {
-                        state_arr = realloc(state_arr, 100 * sizeof(ProgramRegisterState));
+                      
+                    if (inc >= allocated_size) {
+                        printf("allocationg more matrix space\n");
+                        allocated_size = (inc + 1) * 2;
+                        state_arr = (ProgramRegisterState *) realloc(state_arr, allocated_size * sizeof(ProgramRegisterState));
                     }
+                    if (state_arr == NULL) {
+                        free(state_arr);
+                        fprintf(stderr, "realloc failed\n");
+                        return -1;
+                    }
+                    
+
+                    append_row_matrix(&state_arr, inc);
                     return 0;
                     break;
                 case DW_LNE_set_address:
-                    printf("Setting address\n");
+                    //printf("Setting address\n");
                     uint64_t *addy = (uint64_t *)ptr1;
-                    ptr1+=sizeof(*addy);
-                    printf("Address 0x%lx\n", *addy);
+                    ptr1+=sizeof(addy);
+                    //line_offset+=sizeof(addy);
+                    //printf("Address 0x%lx\n", *addy);
+                    printf("%x DW_LNS_set_address (0x%016lx)\n",DW_LNE_set_address, *addy);
+                    line_offset = line_offset + (ptr1 - curr);
                     state_arr[0].address = *addy;
                     state_arr[0].op_index = 0;
                     break;
+                case DW_LNE_set_discriminator:
+                    l_operand = decode_uleb128(&ptr1);
+                    state_arr[0].discriminator = l_operand;
+                    printf("%x DW_LNE_set_discriminator (%d)\n", *curr, l_operand);
+                    line_offset = line_offset + (ptr1 - curr);
+
                 default:
                     break;
 
@@ -401,49 +431,72 @@ int main(int argc, char **argv) {
         else if (*curr < *opcode_base) { // standard opcodes
             switch(*curr) {
                 case DW_LNS_set_column:
-                    printf("DW_LNS_set_column: %d\n", *curr);
+
+                    //printf("DW_LNS_set_column: %d\n", *curr);
                     uint64_t col_val = decode_uleb128(&ptr1);
-                    printf("Checking: %d\n", col_val);
+                    //printf("Checking: %d\n", col_val);
+                    line_offset = line_offset + (ptr1 - curr);
                     state_arr[0].column = col_val;
+                    printf("%x DW_LNS_SET_column (%d)\n", DW_LNS_set_column, col_val);
+
                     break;
                 case DW_LNS_copy:
                     printf("DW_LNS_copy: %d\n", *curr);
+
+                    printf("            0x%016lx     %d    %d    %d\n", state_arr[0].address, state_arr[0].line, state_arr[0].column, state_arr[0].file);
+
+                    line_offset = line_offset + (ptr1 - curr);
+
+                    inc++;
+                    append_row_matrix(&state_arr, inc);
+
+                    state_arr[0].discriminator = 0;
+                    state_arr[0].basic_block = false;
+                    state_arr[0].prologue_end = false;
+                    state_arr[0].epilogue_begin = false;
+
                     break;
                 case DW_LNS_advance_pc:
-                    printf("DW_LNS_advance_pc: %d\n", *curr);
+
                     // takes a single unsigned leb128 oerand as the operation advance
                     // and modifies the address and op_index
                     l_operand = decode_uleb128(&ptr1);
                     op_advance = (int) l_operand;
-                    adj_opcode = op_advance * (*line_range);
                     address_inc = *min_ins_len * ((state_arr[0].op_index + op_advance) /
                             *max_op_inst);
+                    line_offset = line_offset + (ptr1 - curr);
+
+                    printf("%x DW_LNS_advance_pc  (addr += %d, op-index += 0)\n", *curr, address_inc, DW_LNS_advance_pc);
                     state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
-                    printf("New Address: 0x%lx += %d | New OpIndex: %d | \n", state_arr[inc].address, address_inc, state_arr[0].op_index);
 
                     state_arr[0].address += address_inc;
 
                     break;
                 case DW_LNS_advance_line:
-                    printf("DW_LNS_advance_line: %d\n", *curr);
+
                     s_operand = decode_sleb128(&ptr1);                    
-                    state_arr[0].line += state_arr[0].line;
+                    state_arr[0].line += s_operand;
+                    line_offset = line_offset + (ptr1 - curr);
+                    printf("%x DW_LNS_advance_line %d\n", *curr, s_operand);
                     break;
                 case DW_LNS_set_file:
-                    printf("DW_LNS_set_file: %d\n", *curr);
                     l_operand = decode_uleb128(&ptr1);
                     state_arr[0].file = l_operand;
+                    printf("%x DW_LNS_set_file %d\n", *curr, l_operand);
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 case DW_LNS_negate_stmt:
-                    printf("DW_LNS_negate_stmt: %d\n", *curr);
+                    printf("%x DW_LNS_negate_stmt\n", *curr);
                     state_arr[0].is_stmt = !state_arr[0].is_stmt;
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 case DW_LNS_set_basic_block:
-                    printf("DW_LNS_set_basic_block: %d\n", *curr);
+                    printf("%x DW_LNS_set_basic_block \n", *curr);
                     state_arr[0].basic_block = true;
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 case DW_LNS_const_add_pc:
-                    printf("DW_LNS_const_add_pc: %d\n", *curr);
+
                     // advances the address and op_index registers by the increments 
                     // corresponding to special opcode 255
                     adj_opcode = 255 - *opcode_base;
@@ -452,29 +505,35 @@ int main(int argc, char **argv) {
                             *max_op_inst);
 
                     state_arr[0].op_index = (state_arr[0].op_index + op_advance) % *max_op_inst;
-                    printf("New Address: 0x%lx += %d | New OpIndex: %d |\n", state_arr[inc].address, address_inc, state_arr[0].op_index); 
 
+                    printf("%x DW_LNS_const_add_pc (addr += 0x%016x, op-index += 0)\n", *curr, address_inc);
+                    line_offset = line_offset + (ptr1 - curr);
                     state_arr[0].address += address_inc;
 
                     break;
                 case DW_LNS_fixed_advance_pc:
-                    printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
                     l_operand = *(uint16_t *)ptr1; 
                     state_arr[0].address = state_arr[0].address + l_operand;
                     state_arr[0].op_index = 0;
+                    printf("%x DW_LNS_fixed_advance_pc %d\n", *curr, l_operand);
                     ptr1+=sizeof(l_operand);
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 case DW_LNS_set_prologue_end:
-                    printf("DW_LNS_fixed_advance_pc: %d\n", *curr);
+                    printf("%x DW_LNS_fixed_advance_pc \n", *curr);
                     state_arr[0].prologue_end = true;
+                    line_offset = line_offset + (ptr1 - curr);
                     break; 
                 case DW_LNS_set_epilogue_begin:
-                    printf("DW_LNS_epilogue_begin: %d\n", *curr);
+                    printf("%x DW_LNS_epilogue_begin \n", *curr);
                     state_arr[0].isa = true;
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 case DW_LNS_set_isa:
-                    printf("DW_LNS_set_isa: %d\n", *curr);
-                    state_arr[0].isa = decode_uleb128(&ptr1);
+                    l_operand = decode_uleb128(&ptr1);
+                    state_arr[0].isa = l_operand;
+                    printf("%x DW_LNS_set_isa %d\n", *curr, l_operand);
+                    line_offset = line_offset + (ptr1 - curr);
                     break;
                 default:
                     return 0;
@@ -482,7 +541,7 @@ int main(int argc, char **argv) {
 
 
         } else if (*curr >= *opcode_base && *curr <= 255) { // special opcodes
-            printf("Special Opcode Number: %d\n", *curr);
+            //printf("Special Opcode Number: %d\n", *curr);
             // calculate adjusted opcode and operation advance
             adj_opcode = *curr - *opcode_base;
             op_advance = adj_opcode / *line_range; 
@@ -494,14 +553,30 @@ int main(int argc, char **argv) {
 
             int line_inc = *line_base + (adj_opcode % *line_range);
 
-            printf("Adjusted opcode: %d| Operation Advance: %d| Line Increment: %d|\n", adj_opcode, op_advance, line_inc);
-            printf("New Address: 0x%lx += %d | New OpIndex: %d |\n", state_arr[inc].address, address_inc, state_arr[0].op_index); 
+            //printf("Adjusted opcode: %d| Operation Advance: %d| Line Increment: %d|\n", adj_opcode, op_advance, line_inc);
+            //printf("New Address: 0x%lx += %d | New OpIndex: %d |\n", state_arr[0].address, address_inc, state_arr[0].op_index); 
             // add a signed integer to the line register
             state_arr[0].line = state_arr[0].line + line_inc;
             // modify the operation pointer by incrementing the address and op_index registers
             state_arr[0].address += address_inc;
             // append a row to the matrix using the current values of the state machine reg
             inc++;
+            //
+            printf("%x address += %d, line += %d, op-index += 0\n", *curr, address_inc, line_inc);
+
+            printf("            0x%016lx     %d    %d    %d\n", state_arr[0].address, state_arr[0].line, state_arr[0].column, state_arr[0].file);
+              
+            if (inc >= allocated_size) {
+                printf("allocating more matrix space\n");
+                allocated_size = (inc + 1) * 2;
+                state_arr = (ProgramRegisterState *) realloc(state_arr, allocated_size * sizeof(ProgramRegisterState));
+            }
+            if (state_arr == NULL) {
+                fprintf(stderr, "realloc failed\n");
+                return -1;
+            }
+            
+            line_offset = line_offset + (ptr1 - curr);
             append_row_matrix(&state_arr, inc);
             // set the basic_blocks register to false
             state_arr[0].basic_block = false;
@@ -511,6 +586,7 @@ int main(int argc, char **argv) {
             state_arr[0].epilogue_begin = false;
             // set the discriminator register to 0
             state_arr[0].discriminator = 0;
+            address_inc = 0;
 
 
         }
