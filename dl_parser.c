@@ -52,10 +52,6 @@ typedef struct __attribute__((packed)) {
 
 } ProgramRegisterState;
 
-typedef struct __attribute__((packed)) {
-    ProgramRegisterState *state_arr;
-
-} ProgramMatrix;
 
 #define DW_FORM_string 0x08 // string
 
@@ -75,11 +71,6 @@ int main(int argc, char **argv) {
 
     char *path = argv[1];
 
-    // open the file
-    // read the file
-    // parse the elf header
-    // find the program headers
-    // print the number of loadable segmentskjk
 
     int fd = open(path, O_RDONLY);
     if (fd == -1) {
@@ -174,7 +165,6 @@ int main(int argc, char **argv) {
     // directory entry format sequence
     ptr1+=1;
     uint8_t *dir_ent_fmt_seq = ptr1;
-    //ptr1+=1;
 
 
     size_t size = (size_t) sh->sh_size;
@@ -210,21 +200,16 @@ int main(int argc, char **argv) {
     for (int i = 0; i < *dir_ent_fmt_count; i++) {
         dct_arr[i] = decode_uleb128(&ptr1);
         dfc_arr[i] = decode_uleb128(&ptr1);
-        //uint64_t ct = decode_uleb128(&ptr3);
-        //uint64_t fc = decode_uleb128(&ptr3);
         printf("   %x  %x\n", dct_arr[i], dfc_arr[i]);
 
     }
-    // directories count
-    //uint8_t *dir_count = ptr3;
-    //printf("Directories count: %lx\n", decode_uleb128(&dir_count));
+
     uint64_t dc = decode_uleb128(&ptr1);
     printf("Directory count: %d\n", dc); 
 
     uint8_t *directories = ptr1;
 
     // now we find the debug_line_str section addr
-
     sh = get_section(&shdr_array, shnum, ".debug_line_str", strtab);
     if (sh == NULL) {
         return -1;
@@ -351,7 +336,6 @@ int main(int argc, char **argv) {
 
     size_t allocated_size = 100;
     ProgramRegisterState *state_arr = calloc(allocated_size, sizeof(ProgramRegisterState));
-    //ProgramRegisterState default_state = {0, 0, 1, 1, 0, 0, true, false, false, false, 0, 0};
     // initialize default program register state
     initialize_default_state(&state_arr);
 
@@ -400,8 +384,6 @@ int main(int argc, char **argv) {
                         fprintf(stderr, "realloc failed\n");
                         return -1;
                     }
-                    
-
                     append_row_matrix(&state_arr, inc);
                     return 0;
                     break;
@@ -409,8 +391,6 @@ int main(int argc, char **argv) {
                     //printf("Setting address\n");
                     uint64_t *addy = (uint64_t *)ptr1;
                     ptr1+=sizeof(addy);
-                    //line_offset+=sizeof(addy);
-                    //printf("Address 0x%lx\n", *addy);
                     printf("%x DW_LNS_set_address (0x%016lx)\n",DW_LNE_set_address, *addy);
                     line_offset = line_offset + (ptr1 - curr);
                     state_arr[0].address = *addy;
@@ -587,18 +567,9 @@ int main(int argc, char **argv) {
             // set the discriminator register to 0
             state_arr[0].discriminator = 0;
             address_inc = 0;
-
-
         }
-         
-
-
-
-
 
     }
-
-
     return 0;
 }
 
@@ -668,16 +639,6 @@ unsigned char get_next_bytes_in_input() {
 
 }
 
-/*
-result = 0;
-shift = 0;
-unsigned char byte;
-do {
-  byte = get_next_byte_in_input();
-  result |= (byte & 0x7f) << shift; * low-order 7 bits of value 
-  shift += 7;
-} while ((byte & 0x80) != 0); get high-order bit of byte 
-*/
 uint64_t decode_uleb128(uint8_t **ptr){
 
     uint64_t result = 0;
@@ -689,8 +650,6 @@ uint64_t decode_uleb128(uint8_t **ptr){
         result |= (byte & 0x7f) << shift; // low-order 7 bites of value
         shift += 7;
     } while ((byte & 0x80)); // get high-order bit of byte
-                                  //
-    //printf("result : %x\n", result);
     return result;
 }
 
